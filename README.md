@@ -55,7 +55,24 @@ cd BH_Handler
 O script se auto-eleva com `sudo` quando necessário; abra `http://127.0.0.1:8080`.
 Login padrão do BloodHound CE: `admin / admin`.
 
+<p align="center">
+  <img src="print_use.png" alt="BH_Handler subindo os serviços e mostrando o status da sessão ativa" width="720">
+  <br><sub>Subindo os serviços e checando o <code>status</code> da sessão ativa.</sub>
+</p>
+
+<p align="center">
+  <img src="print_stop.png" alt="Ciclo stop / status / up: serviços param e religam retomando a sessão ativa" width="720">
+  <br><sub>Ciclo <code>stop</code> → <code>status</code> → <code>up</code>: os serviços param (PostgreSQL
+  segue de pé) e o <code>up</code> religa Neo4j + bhapi <strong>retomando a sessão</strong>.</sub>
+</p>
+
 ## Comandos
+
+<p align="center">
+  <img src="print_help.png" alt="Saída do BH_Handler --help com a lista de comandos" width="720">
+  <br><sub>Ajuda do BH_Handler (<code>./BH_Handler.py</code> sem argumentos ou <code>help</code>).</sub>
+</p>
+
 
 | Comando | Ação |
 |---------|------|
