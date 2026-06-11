@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Sessões e dados de cliente — NUNCA versionar
+.bloodhound-sessions/
+sessions/
+*.dump
+*.tar.gz
+*.7z
+bhapi.log
+*.log
+
+# SO / editor
+.DS_Store
+*.swp
