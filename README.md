@@ -5,7 +5,7 @@
 <h1 align="center">BH_Handler</h1>
 
 <p align="center">
-  <strong>Gerenciador de sessões para o BloodHound CE no Kali.</strong><br>
+  <strong>Gerenciador de sessões para o BloodHound CE — pacote Kali ou Docker Compose.</strong><br>
   Mantém vários domínios/engajamentos separados e atemporais — cada sessão é um par
   independente (banco PostgreSQL + grafo Neo4j) — e troca entre eles com um comando.
 </p>
@@ -37,9 +37,43 @@ engajamentos **sem mexer no BloodHound na mão** — sai de "um domínio por vez
   do Neo4j, e devolve a posse dos arquivos ao seu usuário.
 - **Troca atômica** — `use <nome>` restaura os dois bancos e religa o BloodHound.
 - **Scratch** — um modo "sem nome" para análises rápidas e descartáveis.
-- **Zero hardcode** — lê credenciais e caminhos reais de `/etc/bhapi/bhapi.json` e
-  `/etc/neo4j/neo4j.conf`, então funciona em qualquer Kali com o pacote `bloodhound`.
-- **Auto-eleva com sudo** — precisa de root para `systemctl`/Neo4j/PostgreSQL.
+- **Dois backends** — `local` (pacote Kali) e `docker` (docker-compose oficial da
+  SpecterOps), com os mesmos comandos e o **mesmo formato de sessão**.
+- **Zero hardcode** — no `local` lê `/etc/bhapi/bhapi.json` e `/etc/neo4j/neo4j.conf`;
+  no `docker` lê o compose resolvido (`docker compose config`): projeto, volumes,
+  usuário/banco do PostgreSQL e porta publicada.
+- **Root só quando precisa** — o `local` se auto-eleva com sudo; o `docker` roda como
+  seu usuário (basta estar no grupo `docker`).
+
+## Backends
+
+| | `local` | `docker` |
+|---|---|---|
+| Serviços | `pg_ctlcluster` + `neo4j` + `bhapi` | `docker compose up/stop` |
+| PostgreSQL | `runuser -u postgres pg_dump/pg_restore` | `docker compose exec app-db pg_dump/pg_restore` |
+| Neo4j | `tar` direto no data dir | `tar` num container descartável do `graph-db` com o mesmo volume |
+| Root | sim (auto-sudo) | não |
+| `stop` | para bhapi + Neo4j (PostgreSQL segue de pé) | para todos os containers (volumes preservados) |
+
+Escolha do backend (o primeiro que existir vence):
+
+1. Flag: `--docker`, `--local` ou `--compose-file PATH` (implica `--docker`)
+2. Variáveis: `BH_BACKEND=docker|local` e `BH_COMPOSE_FILE=PATH`
+3. `~/.bloodhound-sessions/config.json` — **gravado automaticamente quando você passa
+   uma flag**, então basta informar uma vez
+4. Auto-detecção: achou um compose com `specterops/bloodhound` (subindo a partir do
+   diretório atual, em `./bloodhound/`, `~/bloodhound/` ou `~/.config/bloodhound/`)
+   → `docker`; senão, pacote Kali instalado → `local`
+
+```bash
+./BH_Handler.py --compose-file ~/bloodhound/docker-compose.yml status   # 1ª vez (fica salvo)
+./BH_Handler.py new acme                                                # já usa o docker
+./BH_Handler.py --local up                                              # volta pro pacote Kali
+```
+
+> ⚠️ Os dois backends publicam a UI em `127.0.0.1:8080` — não rode os dois ao mesmo tempo.
+> Snapshots são portáveis entre backends (mesmo `pg.dump` + `neo4j_data.tar.gz`), mas o
+> restore cruzado depende das versões de PostgreSQL/Neo4j serem compatíveis.
 
 ## Como rodar
 
@@ -52,8 +86,9 @@ cd BH_Handler
 ./BH_Handler.py save            # checkpoint da sessão ativa
 ./BH_Handler.py status          # estado dos serviços e da sessão ativa
 ```
-O script se auto-eleva com `sudo` quando necessário; abra `http://127.0.0.1:8080`.
-Login padrão do BloodHound CE: `admin / admin`.
+No `local` o script se auto-eleva com `sudo`; abra `http://127.0.0.1:8080`.
+Login: `admin / admin` no pacote Kali. No Docker, cada banco novo (`new`/`clean`) gera
+uma senha inicial aleatória — o `BH_Handler` lê dos logs do container e mostra na tela.
 
 <p align="center">
   <img src="print_use.png" alt="BH_Handler subindo os serviços e mostrando o status da sessão ativa" width="720">
@@ -84,34 +119,39 @@ Login padrão do BloodHound CE: `admin / admin`.
 | `save [nome]` | Salva o estado atual (na ativa, ou criando/usando `<nome>`) |
 | `del <nome>` (`rm`) | Remove uma sessão salva |
 | `rename <a> <b>` (`mv`) | Renomeia uma sessão |
-| `stop` (`down`) | Para o bhapi + Neo4j (PostgreSQL segue de pé) |
-| `status` (`st`) | Estado dos serviços e da sessão ativa |
+| `stop` (`down`) | Para os serviços (ver tabela de backends) |
+| `status` (`st`) | Backend, estado dos serviços e da sessão ativa |
 | `help` | Ajuda |
 
 ## Requisitos
 
-- **Kali Linux** com o pacote oficial: `sudo apt install bloodhound`
-- Binários esperados no `PATH`: `neo4j`, `pg_lsclusters`, `psql`, `runuser`
-  (o script valida e avisa se faltar algo)
 - Python 3 (stdlib apenas — **sem dependências externas**)
+- **local:** Kali com o pacote oficial (`sudo apt install bloodhound`); binários
+  `neo4j`, `pg_lsclusters`, `psql`, `runuser` no `PATH` (o script valida)
+- **docker:** Docker + plugin `docker compose` v2, usuário com acesso ao daemon e o
+  [docker-compose oficial](https://github.com/SpecterOps/BloodHound) (serviços
+  `app-db`, `graph-db`, `bloodhound`)
 
 ## Como funciona (resumo técnico)
 
-1. **Config real, não hardcode** — lê `bhapi.json` (db/usuário/segredo) e `neo4j.conf`
-   (data dir) da própria máquina; os defaults no topo do script são só fallback.
-2. **Salvar** — para `bhapi`+Neo4j, `pg_dump -Fc` do banco e `tar czf` do data dir do
-   Neo4j em `~/.bloodhound-sessions/sessions/<nome>/`, com `meta.json`.
+1. **Config real, não hardcode** — `local`: `bhapi.json` + `neo4j.conf`; `docker`:
+   `docker compose config --format json`. Os defaults no código são só fallback.
+2. **Salvar** — para BloodHound + Neo4j (PostgreSQL fica no ar), `pg_dump -Fc` do banco
+   e `tar czf` do data dir do Neo4j em `~/.bloodhound-sessions/sessions/<nome>/`,
+   com `meta.json`. No Docker o `tar` roda em `docker compose run --rm graph-db`,
+   que monta o mesmo volume.
 3. **Restaurar** — dropa/recria o banco e faz `pg_restore --no-owner`, extrai o tarball
    do Neo4j (preservando dono) e religa os serviços.
 4. **Limpar** — recria o banco vazio e remove só o grafo `neo4j`, **preservando** o db
-   `system` do Neo4j (mantém a autenticação) — o `bhapi` re-migra o schema no boot.
+   `system` do Neo4j (mantém a autenticação) — o BloodHound re-migra o schema no boot.
 
 ## Estrutura
 ```
-BH_Handler.py     o gerenciador (Python 3, stdlib, auto-sudo)
+BH_Handler.py     o gerenciador (Python 3, stdlib; backends local e docker)
 caramelo.jpeg     logo da equipe
 ~/.bloodhound-sessions/        (criado em runtime; NÃO versionado)
   ├── active                   nome da sessão ativa
+  ├── config.json              backend + compose escolhidos via flag
   ├── sessions/<nome>/         pg.dump + neo4j_data.tar.gz + meta.json
   └── logs/bhapi.log
 ```
