@@ -228,6 +228,10 @@ class Backend(ABC):
     @abstractmethod
     def pg_recreate_empty(self): ...
 
+    def pg_db_exists(self):
+        """True se o banco da aplicacao existe (default: assume que sim)."""
+        return True
+
     @abstractmethod
     def pg_dump_to(self, dest: Path): ...
 
@@ -341,6 +345,32 @@ class LocalBackend(Backend):
                 return cols[0], cols[1], cols[2], cols[3]
         return None
 
+    def pg_db_exists(self):
+        p = self._as_pg(["psql", "-d", "postgres", "-tAc",
+                         f"SELECT 1 FROM pg_database WHERE datname='{self.pg_db}';"],
+                        stdout=subprocess.PIPE, stderr=DEVNULL, text=True)
+        return (p.stdout or "").strip() == "1"
+
+    def _pg_refresh_collation(self):
+        """Atualiza a collation version nos bancos de sistema e no bloodhound.
+
+        Apos um upgrade de glibc (ex: 2.42 -> 2.43), o PostgreSQL recusa criar
+        bancos a partir de templates com collation desatualizada."""
+        for db in ("template1", "template0", "postgres", self.pg_db):
+            if db == self.pg_db and not self.pg_db_exists():
+                continue
+            if db == "template0":
+                self._as_pg(["psql", "-d", "postgres", "-c",
+                             "ALTER DATABASE template0 ALLOW_CONNECTIONS = true;"],
+                            stdout=DEVNULL, stderr=DEVNULL)
+            self._as_pg(["psql", "-d", db, "-c",
+                         f"ALTER DATABASE \"{db}\" REFRESH COLLATION VERSION;"],
+                        stdout=DEVNULL, stderr=DEVNULL)
+            if db == "template0":
+                self._as_pg(["psql", "-d", "postgres", "-c",
+                             "ALTER DATABASE template0 ALLOW_CONNECTIONS = false;"],
+                            stdout=DEVNULL, stderr=DEVNULL)
+
     def ensure_postgres(self):
         cl = self.pg_cluster()
         if not cl:
@@ -351,6 +381,7 @@ class LocalBackend(Backend):
             run(["pg_ctlcluster", ver, cluster, "start"])
         for _ in range(30):
             if run(["pg_isready", "-p", port], stdout=DEVNULL, stderr=DEVNULL).returncode == 0:
+                self._pg_refresh_collation()
                 return
             time.sleep(0.5)
         warn("PostgreSQL nao respondeu a pg_isready a tempo (seguindo assim mesmo).")
@@ -539,6 +570,12 @@ class DockerBackend(Backend):
     # -------------------------------------------------------- PostgreSQL
     def _pg_exec(self, args, **kw):
         return self._dc("exec", "-T", self.SVC_PG, *args, **kw)
+
+    def pg_db_exists(self):
+        p = self._pg_exec(["psql", "-U", self.pg_user, "-d", "postgres", "-tAc",
+                           f"SELECT 1 FROM pg_database WHERE datname='{self.pg_db}';"],
+                          stdout=subprocess.PIPE, stderr=DEVNULL, text=True)
+        return (p.stdout or "").strip() == "1"
 
     def ensure_postgres(self):
         if self._dc("up", "-d", "--wait", self.SVC_PG).returncode != 0:
@@ -767,7 +804,10 @@ def snapshot_to(be, name, reason=""):
     info(f"Salvando estado em '{name}' {reason}".rstrip())
     be.stop_app()
     be.ensure_postgres()
-    be.pg_dump_to(sp / "pg.dump")
+    if be.pg_db_exists():
+        be.pg_dump_to(sp / "pg.dump")
+    else:
+        warn(f"Banco nao existe (estado sujo?); pulando pg_dump.")
     be.neo4j_snapshot_to(sp / "neo4j_data.tar.gz")
     meta = read_meta(name)
     write_meta(name, meta.get("description", ""), meta.get("created"))
