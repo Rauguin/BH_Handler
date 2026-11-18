@@ -132,6 +132,47 @@ uma senha inicial aleatória — o `BH_Handler` lê dos logs do container e most
   [docker-compose oficial](https://github.com/SpecterOps/BloodHound) (serviços
   `app-db`, `graph-db`, `bloodhound`)
 
+## Windows (via WSL2)
+
+O BH_Handler é uma ferramenta Linux, mas roda **sem nenhuma alteração** dentro do
+WSL2 — que é um kernel Linux real dentro do Windows. A interface web do BloodHound
+(`http://127.0.0.1:8080`) fica acessível no navegador do Windows automaticamente
+(o WSL2 faz port-forward do localhost), e o script já usa `wslview` para abrir o
+browser do host.
+
+**Setup (uma vez):**
+
+```powershell
+# PowerShell (admin)
+wsl --install -d kali-linux
+```
+
+Depois, dentro do Kali WSL:
+
+```bash
+# Backend docker (recomendado no Windows)
+# 1. Instale o Docker Desktop com integração WSL2 ativada
+# 2. Clone o docker-compose oficial do BloodHound:
+git clone https://github.com/SpecterOps/BloodHound.git ~/bloodhound
+cd ~/bloodhound && cp docker-compose.example.yml docker-compose.yml
+
+# 3. Clone e rode o BH_Handler:
+git clone <url-do-repo> ~/BH_Handler
+cd ~/BH_Handler
+./BH_Handler.py --compose-file ~/bloodhound/docker-compose.yml new acme
+# A UI abre sozinha no browser do Windows
+```
+
+```bash
+# Backend local (alternativa)
+sudo apt update && sudo apt install bloodhound
+./BH_Handler.py new acme
+```
+
+> O backend `docker` é o mais natural no Windows: não precisa de root, usa o Docker
+> Desktop que já roda no host, e o `BH_Handler` detecta o compose automaticamente
+> depois da primeira vez (grava em `~/.bloodhound-sessions/config.json`).
+
 ## Como funciona (resumo técnico)
 
 1. **Config real, não hardcode** — `local`: `bhapi.json` + `neo4j.conf`; `docker`:
